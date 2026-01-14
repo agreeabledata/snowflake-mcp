@@ -451,11 +451,77 @@ def get_var(var_name: str, env_var_name: str, args) -> Optional[str]:
     'myaccount'
     """
 
-    if getattr(args, var_name):
+    if getattr(args, var_name, None):
         return getattr(args, var_name)
     if env_var_name in os.environ:
         return os.environ[env_var_name]
     return None
+
+
+def create_args_from_env() -> argparse.Namespace:
+    """
+    Create an argparse.Namespace from environment variables.
+    
+    This is used for FastMCP Cloud deployment where CLI arguments
+    are not available and configuration comes from environment variables.
+    
+    Returns
+    -------
+    argparse.Namespace
+        Namespace object with values from environment variables
+    """
+    # Create a minimal args object with defaults
+    args = argparse.Namespace()
+    
+    # Set defaults for all login params
+    # login_params structure: {param_name: [arg_flags..., default_value, help_text]}
+    login_params = get_login_params()
+    for key, value_list in login_params.items():
+        # The default value is the second-to-last item in the list
+        # (last item is help text)
+        default_value = value_list[-2] if len(value_list) >= 2 else None
+        
+        # Map parameter names to environment variable names
+        env_var_map = {
+            "account": "SNOWFLAKE_ACCOUNT",
+            "host": "SNOWFLAKE_HOST",
+            "user": "SNOWFLAKE_USER",
+            "password": "SNOWFLAKE_PASSWORD",  # Also checks SNOWFLAKE_PAT
+            "role": "SNOWFLAKE_ROLE",
+            "warehouse": "SNOWFLAKE_WAREHOUSE",
+            "passcode": "SNOWFLAKE_PASSCODE",
+            "private_key": "SNOWFLAKE_PRIVATE_KEY",
+            "private_key_file": "SNOWFLAKE_PRIVATE_KEY_FILE",
+            "private_key_file_pwd": "SNOWFLAKE_PRIVATE_KEY_FILE_PWD",
+        }
+        
+        env_var_name = env_var_map.get(key)
+        if env_var_name:
+            # Special handling for password (also check SNOWFLAKE_PAT)
+            if key == "password":
+                env_value = os.environ.get("SNOWFLAKE_PASSWORD") or os.environ.get("SNOWFLAKE_PAT") or default_value
+            else:
+                env_value = os.environ.get(env_var_name, default_value)
+            setattr(args, key, env_value)
+        else:
+            # For params without env var mapping (like passcode_in_password, authenticator, connection_name)
+            setattr(args, key, default_value)
+    
+    # Set service config file from environment
+    args.service_config_file = os.environ.get("SERVICE_CONFIG_FILE")
+    
+    # Set transport (default to http for cloud)
+    args.transport = os.environ.get("SNOWFLAKE_MCP_TRANSPORT", "http")
+    
+    # Set server host, port, endpoint
+    args.server_host = os.environ.get("SNOWFLAKE_MCP_HOST", "0.0.0.0")
+    args.port = int(os.environ.get("SNOWFLAKE_MCP_PORT", "8000"))
+    args.endpoint = os.environ.get("SNOWFLAKE_MCP_ENDPOINT", "/mcp")
+    
+    # Set verbose flag
+    args.verbose = os.getenv("SNOWFLAKE_MCP_VERBOSE", "").lower() in ("true", "1", "yes")
+    
+    return args
 
 
 def parse_arguments():
@@ -602,9 +668,27 @@ def initialize_tools(snowflake_service: SnowflakeService, server: FastMCP):
             initialize_cortex_analyst_tool(server, snowflake_service)
 
 
-def main():
-    args = parse_arguments()
-
+def create_server(args: Optional[argparse.Namespace] = None) -> FastMCP:
+    """
+    Create and configure the FastMCP server instance.
+    
+    This function can be called with parsed CLI arguments or None
+    (in which case it will use environment variables). This allows
+    the server to work both in CLI mode and FastMCP Cloud mode.
+    
+    Parameters
+    ----------
+    args : argparse.Namespace, optional
+        Parsed command line arguments. If None, will use environment variables.
+    
+    Returns
+    -------
+    FastMCP
+        Configured FastMCP server instance
+    """
+    if args is None:
+        args = create_args_from_env()
+    
     # Configure logging level based on verbose flag or environment variable
     if args.verbose or os.getenv("SNOWFLAKE_MCP_VERBOSE", "").lower() in (
         "true",
@@ -621,7 +705,12 @@ def main():
     warn_deprecated_params()
 
     # Create server with lifespan that has access to args
-    server = FastMCP("Snowflake MCP Server", lifespan=create_lifespan(args))
+    return FastMCP("Snowflake MCP Server", lifespan=create_lifespan(args))
+
+
+def main():
+    args = parse_arguments()
+    server = create_server(args)
 
     try:
         logger.info("Starting Snowflake MCP Server...")
@@ -643,6 +732,27 @@ def main():
     except Exception as e:
         logger.error(f"Error starting MCP server: {e}")
         raise
+
+
+# Create module-level server instance for FastMCP Cloud
+# This will be initialized when the module is imported
+# FastMCP Cloud looks for 'server', 'mcp', or 'app' at module level
+# We only initialize if SERVICE_CONFIG_FILE is set (indicates cloud deployment)
+server = None
+
+# Only auto-initialize if SERVICE_CONFIG_FILE is set (cloud deployment)
+# This ensures FastMCP Cloud can find the server instance immediately
+if os.environ.get("SERVICE_CONFIG_FILE"):
+    try:
+        server = create_server()
+        logger.info("Server initialized at module level for FastMCP Cloud")
+    except Exception as e:
+        # If initialization fails, log but don't fail module import
+        # This allows the module to be imported even if env vars aren't fully set
+        logger.warning(f"Could not initialize server at module level: {e}")
+        logger.warning("Server will need to be initialized via main() or create_server()")
+        # Keep server as None - FastMCP Cloud will show an error which is expected
+        # if required env vars are missing
 
 
 if __name__ == "__main__":
