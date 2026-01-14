@@ -9,10 +9,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import warnings
+
+# Suppress Pydantic deprecation warnings from snowflake-core before any imports
+warnings.filterwarnings("ignore", message=".*PydanticDeprecatedSince20.*")
+
 import argparse
 import json
 import os
-import warnings
+
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
@@ -24,9 +29,6 @@ from fastmcp.utilities.logging import get_logger
 from pydantic import Field
 from snowflake.connector import DictCursor, connect
 from snowflake.core import Root
-
-# Suppress Pydantic deprecation warnings from snowflake-core
-warnings.filterwarnings("ignore", message=".*PydanticDeprecatedSince20.*")
 
 from mcp_server_snowflake.cortex_services.tools import (
     initialize_cortex_agent_tool,
