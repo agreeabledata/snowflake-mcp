@@ -189,7 +189,6 @@ def parse_object(target_object: Any, obj_type: supported_objects):
 
 
 def initialize_object_manager_tools(server: FastMCP, snowflake_service):
-    root = snowflake_service.root
     supported_objects_list = list(get_args(supported_objects))
     object_type_annotation = Annotated[
         supported_objects,
@@ -219,9 +218,15 @@ def initialize_object_manager_tools(server: FastMCP, snowflake_service):
             "error_if_exists", "replace", "if_not_exists"
         ] = "error_if_exists",
     ):
+        if snowflake_service.root is None:
+            raise SnowflakeException(
+                tool="create_object",
+                message="Snowflake connection is not available",
+                status_code=503,
+            )
         # If string is passed, parse JSON and create object
         target_object = parse_object(target_object, object_type)
-        return create_object(target_object, root, mode)
+        return create_object(target_object, snowflake_service.root, mode)
 
     @server.tool(
         name="drop_object",
@@ -232,8 +237,14 @@ def initialize_object_manager_tools(server: FastMCP, snowflake_service):
         target_object: target_object_annotation,
         if_exists: bool = False,
     ):
+        if snowflake_service.root is None:
+            raise SnowflakeException(
+                tool="drop_object",
+                message="Snowflake connection is not available",
+                status_code=503,
+            )
         target_object = parse_object(target_object, object_type)
-        return drop_object(target_object, root, if_exists)
+        return drop_object(target_object, snowflake_service.root, if_exists)
 
     @server.tool(
         name="create_or_alter_object",
@@ -243,8 +254,14 @@ def initialize_object_manager_tools(server: FastMCP, snowflake_service):
         object_type: object_type_annotation,
         target_object: target_object_annotation,
     ):
+        if snowflake_service.root is None:
+            raise SnowflakeException(
+                tool="create_or_alter_object",
+                message="Snowflake connection is not available",
+                status_code=503,
+            )
         target_object = parse_object(target_object, object_type)
-        return create_or_alter_object(target_object, root)
+        return create_or_alter_object(target_object, snowflake_service.root)
 
     @server.tool(
         name="describe_object",
@@ -254,8 +271,14 @@ def initialize_object_manager_tools(server: FastMCP, snowflake_service):
         object_type: object_type_annotation,
         target_object: target_object_annotation,
     ):
+        if snowflake_service.root is None:
+            raise SnowflakeException(
+                tool="describe_object",
+                message="Snowflake connection is not available",
+                status_code=503,
+            )
         target_object = parse_object(target_object, object_type)
-        return describe_object(target_object, root)
+        return describe_object(target_object, snowflake_service.root)
 
     @server.tool(
         name="list_objects",

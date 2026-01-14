@@ -174,8 +174,16 @@ class SnowflakeService:
 
         self.unpack_service_specs()
         # Persist connection to avoid closing it after each request
-        self.connection = self._get_persistent_connection()
-        self.root = Root(self.connection)
+        try:
+            self.connection = self._get_persistent_connection()
+            self.root = Root(self.connection)
+        except Exception as e:
+            logger.warning(
+                f"Could not establish Snowflake connection during initialization: {e}. "
+                "Server will start but Snowflake operations will be unavailable until connection is established."
+            )
+            self.connection = None
+            self.root = None
 
     def unpack_service_specs(self) -> None:
         """
@@ -228,6 +236,11 @@ class SnowflakeService:
         -------
         Dict[str, str]
             HTTP headers with authentication
+
+        Raises
+        ------
+        ValueError
+            If connection is not available
         """
         if self._is_spcs_container:
             return {
@@ -237,6 +250,10 @@ class SnowflakeService:
             }
         else:
             # For external environments, we need to use the connection token
+            if self.connection is None:
+                raise ValueError(
+                    "Snowflake connection is not available. Cannot generate API headers."
+                )
             return {
                 "Accept": "application/json, text/event-stream",
                 "Content-Type": "application/json",
@@ -251,12 +268,21 @@ class SnowflakeService:
         -------
         str
             API host URL
+
+        Raises
+        ------
+        ValueError
+            If connection is not available
         """
         if self._is_spcs_container:
             return os.getenv(
                 "SNOWFLAKE_HOST", self.connection_params.get("account", "")
             )
         else:
+            if self.connection is None:
+                raise ValueError(
+                    "Snowflake connection is not available. Cannot get API host."
+                )
             return self.connection.host
 
     @staticmethod
@@ -407,6 +433,8 @@ class SnowflakeService:
                     client_session_keep_alive=False,
                     paramstyle="qmark",
                 )
+                if self.root is None:
+                    self.root = Root(self.connection)
 
             cursor = (
                 self.connection.cursor(DictCursor)
@@ -659,10 +687,21 @@ def create_lifespan(args):
             initialize_middleware(server, snowflake_service)
             initialize_resources(snowflake_service, server)
 
+            if snowflake_service.connection is None:
+                logger.warning(
+                    "Snowflake MCP server started without active connection. "
+                    "Some features will be unavailable until connection is established."
+                )
+
             yield snowflake_service
         except Exception as e:
             logger.error(f"Error creating Snowflake service: {e}")
-            raise
+            if snowflake_service is None:
+                raise
+            logger.warning(
+                "Continuing with degraded service - connection may be unavailable"
+            )
+            yield snowflake_service
 
         finally:
             if snowflake_service is not None:
