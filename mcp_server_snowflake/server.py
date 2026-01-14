@@ -315,16 +315,16 @@ class SnowflakeService:
             else:
                 logger.info("Using external authentication")
                 connection_params = self.connection_params.copy()
-
-            # We are passing session_parameters and client_session_keep_alive
-            # so we cannot rely on the connection to infer default connection name.
-            # So instead, if no explicit values passed via CLI, we replicate the same logic here
-            if not connection_params:
-                connection_params = {
-                    "connection_name": os.getenv(
-                        "SNOWFLAKE_DEFAULT_CONNECTION_NAME", "default"
-                    ),
-                }
+                if not connection_params:
+                    connection_name = os.getenv("SNOWFLAKE_DEFAULT_CONNECTION_NAME")
+                    if connection_name:
+                        connection_params = {"connection_name": connection_name}
+                    else:
+                        raise ValueError(
+                            "No Snowflake connection parameters provided. "
+                            "Please provide connection parameters via environment variables "
+                            "(SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PASSWORD, etc.)."
+                        )
 
             connection = connect(
                 **connection_params,
@@ -390,6 +390,16 @@ class SnowflakeService:
                 else:
                     logger.info("Using external authentication")
                     connection_params = self.connection_params.copy()
+                    if not connection_params:
+                        connection_name = os.getenv("SNOWFLAKE_DEFAULT_CONNECTION_NAME")
+                        if connection_name:
+                            connection_params = {"connection_name": connection_name}
+                        else:
+                            raise ValueError(
+                                "No Snowflake connection parameters provided. "
+                                "Please provide connection parameters via environment variables "
+                                "(SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PASSWORD, etc.)."
+                            )
 
                 self.connection = connect(
                     **connection_params,
