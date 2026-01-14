@@ -20,7 +20,10 @@ This document describes the changes made to support FastMCP Cloud deployment and
 For FastMCP Cloud deployment, you must set the following environment variables in the FastMCP Cloud interface:
 
 ### Required
-- `SERVICE_CONFIG_FILE`: Path to your service configuration YAML file (e.g., `/app/services/configuration.yaml`)
+- `SERVICE_CONFIG_FILE`: Path to your service configuration YAML file
+  - Can be absolute (e.g., `/app/services/configuration.yaml`) or relative (e.g., `services/configuration.yaml`)
+  - Relative paths are resolved from the project root (where FastMCP Cloud runs)
+  - Recommended: Use relative path `services/configuration.yaml` for simplicity
 
 ### Snowflake Connection (at least one authentication method)
 
@@ -87,3 +90,15 @@ For FastMCP Cloud deployment, you must set the following environment variables i
 - The module-level server instance is only initialized when `SERVICE_CONFIG_FILE` is set
 - This ensures backward compatibility with CLI usage where arguments are parsed from command line
 - FastMCP Cloud will automatically discover and use the module-level `server` instance
+- The working directory for FastMCP Cloud is typically the project root, so relative paths work well
+- The `fastmcp.json` file must be in the repository root for FastMCP Cloud to detect it
+- All dependencies listed in `fastmcp.json` match those in `pyproject.toml` for consistency
+
+## Quick Start Checklist
+
+Before deploying, ensure:
+- [ ] `fastmcp.json` exists in the repository root
+- [ ] `services/configuration.yaml` exists (or your custom config file)
+- [ ] `SERVICE_CONFIG_FILE` environment variable is set (e.g., `services/configuration.yaml`)
+- [ ] All required Snowflake connection environment variables are set
+- [ ] Your GitHub repository is linked to FastMCP Cloud
