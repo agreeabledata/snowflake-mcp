@@ -668,7 +668,7 @@ def initialize_tools(snowflake_service: SnowflakeService, server: FastMCP):
             initialize_cortex_analyst_tool(server, snowflake_service)
 
 
-def create_server(args: Optional[argparse.Namespace] = None) -> FastMCP:
+def create_server(args: Optional[argparse.Namespace] = None, allow_minimal: bool = False) -> FastMCP:
     """
     Create and configure the FastMCP server instance.
     
@@ -680,6 +680,8 @@ def create_server(args: Optional[argparse.Namespace] = None) -> FastMCP:
     ----------
     args : argparse.Namespace, optional
         Parsed command line arguments. If None, will use environment variables.
+    allow_minimal : bool, default=False
+        If True, create a minimal server for inspection even if config is missing.
     
     Returns
     -------
@@ -704,7 +706,13 @@ def create_server(args: Optional[argparse.Namespace] = None) -> FastMCP:
 
     warn_deprecated_params()
 
-    # Create server with lifespan that has access to args
+    if allow_minimal and not args.service_config_file:
+        @asynccontextmanager
+        async def minimal_lifespan(server: FastMCP) -> AsyncIterator[None]:
+            yield None
+        
+        return FastMCP("Snowflake MCP Server", lifespan=minimal_lifespan)
+
     return FastMCP("Snowflake MCP Server", lifespan=create_lifespan(args))
 
 
@@ -735,24 +743,16 @@ def main():
 
 
 # Create module-level server instance for FastMCP Cloud
-# This will be initialized when the module is imported
 # FastMCP Cloud looks for 'server', 'mcp', or 'app' at module level
-# We only initialize if SERVICE_CONFIG_FILE is set (indicates cloud deployment)
 server = None
 
-# Only auto-initialize if SERVICE_CONFIG_FILE is set (cloud deployment)
-# This ensures FastMCP Cloud can find the server instance immediately
-if os.environ.get("SERVICE_CONFIG_FILE"):
-    try:
-        server = create_server()
+try:
+    server = create_server(allow_minimal=True)
+    if os.environ.get("SERVICE_CONFIG_FILE"):
         logger.info("Server initialized at module level for FastMCP Cloud")
-    except Exception as e:
-        # If initialization fails, log but don't fail module import
-        # This allows the module to be imported even if env vars aren't fully set
-        logger.warning(f"Could not initialize server at module level: {e}")
-        logger.warning("Server will need to be initialized via main() or create_server()")
-        # Keep server as None - FastMCP Cloud will show an error which is expected
-        # if required env vars are missing
+except Exception as e:
+    logger.warning(f"Could not initialize server at module level: {e}")
+    server = FastMCP("Snowflake MCP Server")
 
 
 if __name__ == "__main__":
