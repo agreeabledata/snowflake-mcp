@@ -12,16 +12,21 @@
 import argparse
 import json
 import os
+import warnings
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
-from typing import Any, Dict, Generator, Literal, Optional, Tuple, cast
+from typing import Annotated, Any, Dict, Generator, Literal, Optional, Tuple, Union, cast, get_args
 
 import yaml
 from fastmcp import FastMCP
 from fastmcp.utilities.logging import get_logger
+from pydantic import Field
 from snowflake.connector import DictCursor, connect
 from snowflake.core import Root
+
+# Suppress Pydantic deprecation warnings from snowflake-core
+warnings.filterwarnings("ignore", message=".*PydanticDeprecatedSince20.*")
 
 from mcp_server_snowflake.cortex_services.tools import (
     initialize_cortex_agent_tool,
@@ -32,13 +37,28 @@ from mcp_server_snowflake.environment import (
     get_spcs_container_token,
     is_running_in_spcs_container,
 )
-from mcp_server_snowflake.object_manager.tools import initialize_object_manager_tools
-from mcp_server_snowflake.query_manager.tools import initialize_query_manager_tool
+from mcp_server_snowflake.object_manager.tools import (
+    describe_object,
+    initialize_object_manager_tools,
+    list_objects,
+    parse_object,
+)
+from mcp_server_snowflake.object_manager.objects import (
+    SnowflakeObject,
+    supported_objects,
+)
+from mcp_server_snowflake.object_manager.prompts import get_object_mgmt_prompt
+from mcp_server_snowflake.query_manager.tools import (
+    initialize_query_manager_tool,
+    run_query,
+)
+from mcp_server_snowflake.query_manager.prompts import query_tool_prompt
 from mcp_server_snowflake.semantic_manager.tools import (
     initialize_semantic_manager_tools,
 )
 from mcp_server_snowflake.server_utils import initialize_middleware
 from mcp_server_snowflake.utils import (
+    SnowflakeException,
     cleanup_snowflake_service,
     get_login_params,
     load_tools_config_resource,
@@ -507,8 +527,9 @@ def create_args_from_env() -> argparse.Namespace:
             # For params without env var mapping (like passcode_in_password, authenticator, connection_name)
             setattr(args, key, default_value)
     
-    # Set service config file from environment
     args.service_config_file = os.environ.get("SERVICE_CONFIG_FILE")
+    if not args.service_config_file and os.path.exists("services/configuration.yaml"):
+        args.service_config_file = "services/configuration.yaml"
     
     # Set transport (default to http for cloud)
     args.transport = os.environ.get("SNOWFLAKE_MCP_TRANSPORT", "http")
@@ -642,6 +663,95 @@ def initialize_resources(snowflake_service: SnowflakeService, server: FastMCP):
         return json.loads(tools_config)
 
 
+def initialize_default_tools(server: FastMCP, snowflake_service: SnowflakeService | None = None):
+    """Register default tools when no config file is available."""
+    @server.tool(
+        name="run_snowflake_query",
+        description=query_tool_prompt,
+    )
+    def run_query_tool(
+        statement: Annotated[
+            str,
+            Field(description="SQL query to execute"),
+        ],
+    ):
+        if snowflake_service is None:
+            raise SnowflakeException(
+                tool="query_manager",
+                message="Snowflake connection not available",
+                status_code=500,
+            )
+        return run_query(statement, snowflake_service)
+
+    root = snowflake_service.root if snowflake_service is not None else None
+
+    supported_objects_list = list(get_args(supported_objects))
+    object_type_annotation = Annotated[
+        supported_objects,
+        Field(
+            description=f"Type of Snowflake object. One of {', '.join(supported_objects_list)}"
+        ),
+    ]
+    target_object_annotation = Annotated[
+        Union[
+            str, *get_args(SnowflakeObject)
+        ],
+        Field(
+            description="Always pass properties of target_object as an object, not a string"
+        ),
+    ]
+
+    @server.tool(
+        name="list_objects",
+        description=get_object_mgmt_prompt("list", supported_objects_list),
+    )
+    def list_objects_tool(
+        object_type: object_type_annotation,
+        database_name: str | None = None,
+        schema_name: str | None = None,
+        like: Annotated[
+            str | None,
+            Field(
+                description="Filter objects by keyword in name. Case insensitive.",
+                default=None,
+            ),
+        ] = None,
+        starts_with: Annotated[
+            str | None,
+            Field(
+                description="Filter objects by start of name. Case sensitive.",
+                default=None,
+            ),
+        ] = None,
+    ):
+        if snowflake_service is None:
+            raise SnowflakeException(
+                tool="list_objects",
+                message="Snowflake connection not available",
+                status_code=500,
+            )
+        return list_objects(
+            object_type, snowflake_service, database_name, schema_name, like, starts_with
+        )
+
+    @server.tool(
+        name="describe_object",
+        description=get_object_mgmt_prompt("describe", supported_objects_list),
+    )
+    def describe_object_tool(
+        object_type: object_type_annotation,
+        target_object: target_object_annotation,
+    ):
+        if root is None:
+            raise SnowflakeException(
+                tool="describe_object",
+                message="Snowflake connection not available",
+                status_code=500,
+            )
+        target_object = parse_object(target_object, object_type)
+        return describe_object(target_object, root)
+
+
 def initialize_tools(snowflake_service: SnowflakeService, server: FastMCP):
     if snowflake_service is not None:
         # Add tools for object manager
@@ -709,6 +819,7 @@ def create_server(args: Optional[argparse.Namespace] = None, allow_minimal: bool
     if allow_minimal and not args.service_config_file:
         @asynccontextmanager
         async def minimal_lifespan(server: FastMCP) -> AsyncIterator[None]:
+            initialize_default_tools(server, None)
             yield None
         
         return FastMCP("Snowflake MCP Server", lifespan=minimal_lifespan)
