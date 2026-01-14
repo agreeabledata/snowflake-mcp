@@ -9,10 +9,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import os
 import warnings
 
 # Suppress Pydantic deprecation warnings from snowflake-core before any imports
+os.environ.setdefault("PYTHONWARNINGS", "ignore::pydantic.warnings.PydanticDeprecatedSince20")
+try:
+    from pydantic.warnings import PydanticDeprecatedSince20
+    warnings.filterwarnings("ignore", category=PydanticDeprecatedSince20)
+except ImportError:
+    pass
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="pydantic")
 warnings.filterwarnings("ignore", message=".*PydanticDeprecatedSince20.*")
+warnings.filterwarnings("ignore", message=".*class-based `config` is deprecated.*")
+warnings.filterwarnings("ignore", message=".*update_forward_refs.*")
 
 import argparse
 import json
